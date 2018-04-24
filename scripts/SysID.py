@@ -1,14 +1,14 @@
-def LMPC_EstimateABC(LinPoints, N, n, d, SS, uSS, TimeSS, qp, matrix, PointAndTangent, dt, it):
+def LMPC_EstimateABC(LinPoints, LinInput, N, n, d, SS, uSS, TimeSS, qp, matrix, PointAndTangent, dt, it):
     import numpy as np
-    from SysModel import Curvature
+    from Track import Curvature
     import datetime
 
     Atv = []; Btv = []; Ctv = []; indexUsed_list = []
 
-    usedIt = range(it-1,it)
+    usedIt = range(it-2,it)
 
-    for i in range(0, N + 1):
-        MaxNumPoint = 200 # Need to reason on how these points are selected
+    for i in range(0, N):
+        MaxNumPoint = 40 # Need to reason on how these points are selected
         x0 = LinPoints[i, :]
 
         Ai = np.zeros((n, n))
@@ -19,14 +19,25 @@ def LMPC_EstimateABC(LinPoints, N, n, d, SS, uSS, TimeSS, qp, matrix, PointAndTa
         h = 5
         lamb = 0.0
         stateFeatures = [0, 1, 2]
-        scaling = np.array([[1.0, 0.0, 0.0],
-                            [0.0, 1.0, 0.0],
-                            [0.0, 0.0, 1.0]])
+        ConsiderInput = 1
+
+        if ConsiderInput == 1:
+            scaling = np.array([[0.1, 0.0, 0.0, 0.0, 0.0],
+                                [0.0, 1.0, 0.0, 0.0, 0.0],
+                                [0.0, 0.0, 1.0, 0.0, 0.0],
+                                [0.0, 0.0, 0.0, 1.0, 0.0],
+                                [0.0, 0.0, 0.0, 0.0, 1.0]])
+            xLin = np.hstack((LinPoints[i, stateFeatures], LinInput[i, :]))
+        else:
+            scaling = np.array([[1.0, 0.0, 0.0],
+                                [0.0, 1.0, 0.0],
+                                [0.0, 0.0, 1.0]])
+            xLin = LinPoints[i, stateFeatures]
 
         indexSelected = []
         K = []
         for i in usedIt:
-            indexSelected_i, K_i = ComputeIndex(h, SS, TimeSS, i, x0, stateFeatures, scaling, MaxNumPoint)
+            indexSelected_i, K_i = ComputeIndex(h, SS, uSS, TimeSS, i, xLin, stateFeatures, scaling, MaxNumPoint, ConsiderInput)
             indexSelected.append(indexSelected_i)
             K.append(K_i)
 
@@ -72,7 +83,7 @@ def LMPC_EstimateABC(LinPoints, N, n, d, SS, uSS, TimeSS, qp, matrix, PointAndTa
         depsi_wz   =      dt
         depsi_epsi =  1 - dt * ( -vx * np.sin(epsi) - vy * np.cos(epsi) ) / den * cur
         depsi_s    =      0                                                                      # Because cur = constant
-        depsi_ey   =    - dt * (vx * np.cos(epsi) - vy * np.sin(epsi)) / (den**2) * cur * (-cur)
+        depsi_ey   =      dt * (vx * np.cos(epsi) - vy * np.sin(epsi)) / (den**2) * cur * (-cur)
 
         Ai[3, :]   = [depsi_vx, depsi_vy, depsi_wz, depsi_epsi, depsi_s, depsi_ey]
 
@@ -84,7 +95,7 @@ def LMPC_EstimateABC(LinPoints, N, n, d, SS, uSS, TimeSS, qp, matrix, PointAndTa
         ds_wz    =  0
         ds_epsi  =  dt * (-vx * np.sin(epsi) - vy * np.cos(epsi)) / den
         ds_s     = 1 #+ Ts * (Vx * cos(epsi) - Vy * sin(epsi)) / (1 - ey * rho) ^ 2 * (-ey * drho);
-        ds_ey    =  dt * ( vx * np.cos(epsi) - vy * np.sin(epsi)) / (( den )**2)* (-cur)
+        ds_ey    = -dt * ( vx * np.cos(epsi) - vy * np.sin(epsi)) / ( den*2)* (-cur)
 
         Ai[4, :] = [ds_vx, ds_vy, ds_wz, ds_epsi, ds_s, ds_ey]
 
@@ -172,7 +183,7 @@ def LMPC_LocLinReg(Q, b, stateFeatures, inputFeatures, qp):
 
     return A, B, C
 
-def ComputeIndex(h, SS, TimeSS, it, x0, stateFeatures, scaling, MaxNumPoint):
+def ComputeIndex(h, SS, uSS, TimeSS, it, x0, stateFeatures, scaling, MaxNumPoint, ConsiderInput):
     import numpy as np
     from numpy import linalg as la
     import datetime
@@ -183,8 +194,19 @@ def ComputeIndex(h, SS, TimeSS, it, x0, stateFeatures, scaling, MaxNumPoint):
 
     # What to learn a model such that: x_{k+1} = A x_k  + B u_k + C
     oneVec = np.ones( (SS[0:TimeSS[it], :, it].shape[0]-1, 1) )
-    x0Vec = (np.dot( np.array([x0[stateFeatures]]).T, oneVec.T )).T
-    diff  = np.dot(( SS[0:TimeSS[it], :, it][0:-1, stateFeatures] - x0Vec ), scaling)
+
+    x0Vec = (np.dot( np.array([x0]).T, oneVec.T )).T
+
+    if ConsiderInput == 1:
+        DataMatrix = np.hstack((SS[0:TimeSS[it]-1, stateFeatures, it], uSS[0:TimeSS[it]-1, :, it]))
+    else:
+        DataMatrix = SS[0:TimeSS[it]-1, stateFeatures, it]
+
+    # np.savetxt('A.csv', SS[0:TimeSS[it]-1, stateFeatures, it], delimiter=',', fmt='%f')
+    # np.savetxt('B.csv', SS[0:TimeSS[it], :, it][0:-1, stateFeatures], delimiter=',', fmt='%f')
+    # np.savetxt('SS.csv', SS[0:TimeSS[it], :, it], delimiter=',', fmt='%f')
+
+    diff  = np.dot(( DataMatrix - x0Vec ), scaling)
     # print 'x0Vec \n',x0Vec
     norm = la.norm(diff, 1, axis=1)
     indexTot =  np.squeeze(np.where(norm < h))
@@ -208,15 +230,13 @@ def EstimateABC(LinPoints, N, n, d, x, u, qp, matrix, PointAndTangent, dt):
     import numpy as np
     from Track import Curvature
 
+
     Atv = []; Btv = []; Ctv = []
 
-    print "\nEstimateABC dt=", dt
-    print "LinPoints: ", LinPoints
     for i in range(0, N + 1):
-        MaxNumPoint = 500 # Need to reason on how these points are selected
+        MaxNumPoint = 250 # Need to reason on how these points are selected
         x0 = LinPoints[i, :]
 
-        #print "i:",i, "x0: ", x0
 
         Ai = np.zeros((n, n))
         Bi = np.zeros((n, d))
@@ -233,7 +253,6 @@ def EstimateABC(LinPoints, N, n, d, x, u, qp, matrix, PointAndTangent, dt):
                             [0.0, 1.0, 0.0],
                             [0.0, 0.0, 1.0]])
 
-        #print "\nIdentity vx\n"
         Ai[yIndex, stateFeatures], Bi[yIndex, inputFeatures], Ci[yIndex], _ = LocLinReg(h, x, u, x0, yIndex, stateFeatures,
                                                                              inputFeatures, scaling, qp, matrix, lamb, MaxNumPoint)
 
@@ -248,7 +267,7 @@ def EstimateABC(LinPoints, N, n, d, x, u, qp, matrix, PointAndTangent, dt):
         #                     [0.0, 1.0, 0.0],
         #                     [0.0, 0.0, 1.0]])
         scaling = np.eye(len(stateFeatures))
-        #print "\nIdentity vy\n"
+
         Ai[yIndex, stateFeatures], Bi[yIndex, inputFeatures], Ci[yIndex], _ = LocLinReg(h, x, u, x0, yIndex, stateFeatures,
                                                                              inputFeatures, scaling, qp, matrix, lamb, MaxNumPoint)
 
@@ -263,7 +282,7 @@ def EstimateABC(LinPoints, N, n, d, x, u, qp, matrix, PointAndTangent, dt):
         #                     [0.0, 1.0, 0.0],
         #                     [0.0, 0.0, 1.0]])
         scaling = np.eye(len(stateFeatures))
-        #print "\nIdentity dPsi\n"
+
         Ai[yIndex, stateFeatures], Bi[yIndex, inputFeatures], Ci[yIndex], _ = LocLinReg(h, x, u, x0, yIndex, stateFeatures,
                                                                              inputFeatures, scaling, qp, matrix, lamb, MaxNumPoint)
 
@@ -357,8 +376,6 @@ def LocLinReg(h, x, u, x0, yIndex, stateFeatures, inputFeatures, scaling, qp, ma
     B = Result[len(stateFeatures):(len(stateFeatures)+len(inputFeatures))]
     C = Result[-1]
 
-    #print "\nA: ", A, "\nB: ", B, "\nC: ", C 
-
     return A, B, C, index
 
 
@@ -368,7 +385,7 @@ def Regression(x, u, lamb):
     # with z_i = [x_i u_i] and W \in R^{n + d} x n
     Y = x[2:x.shape[0], :]
     X = np.hstack( (x[1:(x.shape[0]-1), :], u[1:(x.shape[0]-1), :]))
-    #print "X: \n", X,"\nY: \n", Y
+
     Q = np.linalg.inv( np.dot( X.T, X) + lamb * np.eye( X.shape[1] ) )
     b = np.dot(X.T, Y)
     W = np.dot( Q , b)

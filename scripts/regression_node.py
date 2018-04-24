@@ -3,18 +3,21 @@
 import rospy
 import numpy as np
 import math
-from SysID import LocLinReg, Regression, EstimateABC
 from FTOCP import BuildMatEqConst, BuildMatCost, BuildMatIneqConst, FTOCP, GetPred
+from SysID import LocLinReg, Regression, EstimateABC, LMPC_EstimateABC
 from LMPC import LMPC, ComputeCost, LMPC_BuildMatEqConst, LMPC_BuildMatIneqConst
 from Track import CreateTrack, Evaluate_e_ey
 from cvxopt.solvers import qp
 from cvxopt import spmatrix, matrix, solvers
 from scipy import linalg
+from numpy import linalg as la
 import datetime
 
 from car_mpc_control.msg import LogMPC
 from car_unity_simulator.msg import CarState, CarControl
 import csv
+
+solvers.options['show_progress'] = False      # Turn off CVX messages
 
 Points = 900
 N = 8
@@ -48,13 +51,15 @@ last_dist = 0
 
 Laps = 10
 
-numSS_Points = 100
+numSS_Points = 30
 
 TimeSS= 10000*np.ones(Laps+2)
+addSS = np.zeros(Laps+2)
 SS    = 10000*np.ones((2*states.shape[0], 6, Laps+2))
 uSS   = 10000*np.ones((2*states.shape[0], 2, Laps+2))
 Qfun  = 0*np.ones((2*states.shape[0], Laps+2)) # Need to initialize at zero as adding point on the fly
 
+additionalPoints = 0
 """
 A = np.zeros((6,6))
 B = np.zeros((6,2))
@@ -220,9 +225,9 @@ def collectData():
     u[i,0] = last_steer
     u[i,1] = last_throttle
 
-    print "i: ",i, " ind:", ind, " State: ", states[i,:], " Control: ", u[i,:]
+    #print "i: ",i, " ind:", ind, " State: ", states[i,:], " Control: ", u[i,:]
     i=i+1
-  else:
+  #else:
     
     #lamb = 0.01
     #print "X: \n", states, "\n U: ", u
@@ -235,13 +240,18 @@ def collectData():
 def newLap():
   global TimeSS, uSS, SS, Qfun, Lap, i
   global states, u
+  global firstMPCstep
+  global additionalPoints
 
   TimeSS[Lap] = i
   SS[0:TimeSS[Lap],:, Lap]  = states[0:i,:]
-  uSS[0:TimeSS[Lap]-1,:, Lap]  = u[0:i,:]
-  Qfun[0:TimeSS[Lap], Lap] = ComputeCost(states, u, np, TrackLength) 
+  uSS[0:TimeSS[Lap],:, Lap]  = u[0:i,:]
+  Qfun[0:TimeSS[Lap], Lap] = ComputeCost(states[0:i,:], u[0:i,:], np, TrackLength) 
+  print "Cost at lap ", Lap, " is ",Qfun[0,Lap]
 
   Lap = Lap + 1
+  firstMPCstep = True
+  additionalPoints = 0
   i=0
 
 # main function
@@ -264,12 +274,20 @@ if __name__ == '__main__':
   target_speed = 5.0
   n = 6
   d = 2
+
+  swifth = N-1
   
   Q = np.diag([5.0, 0.0, 0, 1, 0.0, 10.0]) # vx, vy, wz, epsi, s, ey
-  R = np.diag([20.0, 5.0]) # delta, a
+  R = np.diag([30.0, 5.0]) # delta, a
   F, b = BuildMatIneqConst(N, n, np, linalg, spmatrix)
   M, q    = BuildMatCost(Q, R, Q, N, linalg, np, spmatrix, target_speed)
   
+  F_LMPC, b_LMPC = LMPC_BuildMatIneqConst(N, n, np, linalg, spmatrix, numSS_Points)
+
+  Qslack = 50*np.diag([1, 10, 10, 10, 10, 10])
+  Q_LMPC = 0 * np.diag([0.0, 0.0, 0.0, 0.0, 0.0, 0.0])  # vx, vy, wz, epsi, s, ey
+  R_LMPC = 5 * np.diag([10.0, 1.0])  # delta, a
+
   while not rospy.is_shutdown():
 
     if distAlong<last_dist-10.0: #it means that car cross start line
@@ -277,6 +295,9 @@ if __name__ == '__main__':
     
     if vx>0.5:
       collectData()
+    
+    x0 = np.array([vx, vy, dPsi, ePsi, distAlong, ey ])
+    #print "\n x0: ", x0
 
     last_dist = distAlong
     if Lap==0:
@@ -284,11 +305,7 @@ if __name__ == '__main__':
       last_steer = - 0.1 * ey - 0.1 * ePsi + np.maximum(-0.1, np.min(np.random.randn()*0.05, 0.1))
       last_throttle = 0.5*(target_speed - vx) + np.maximum(-0.1, np.min(np.random.randn()*0.05, 0.1))
 
-    else:
-
-      x0 = np.array([vx, vy, dPsi, ePsi, distAlong, ey ])
-
-      print "\n x0: ", x0
+    elif Lap==1:
 
       startTimer = datetime.datetime.now() # Start timer for LMPC iteration
       if firstMPCstep:
@@ -303,16 +320,53 @@ if __name__ == '__main__':
       Sol, feasible = FTOCP(M, q, G, L, E, F, b, x0, np, qp, matrix)
       endTimer = datetime.datetime.now(); deltaTimer = endTimer - startTimer
 
-      print("Linearization time: %.4fs Solver time: %.4fs" % (deltaTimer_tv.total_seconds(), deltaTimer.total_seconds()))
+      #print("Linearization time: %.4fs Solver time: %.4fs" % (deltaTimer_tv.total_seconds(), deltaTimer.total_seconds()))
 
       xPred, uPred = GetPred(Sol, n, d, N, np)
       LinPoints = xPred.T
-
-      print "\n xPred: ", xPred, "\n uPred:", uPred
+      LinInput = uPred.T
+      #print "\n xPred: ", xPred, "\n uPred:", uPred
 
       last_steer = np.asscalar(uPred[0,0])
       last_throttle = np.asscalar(uPred[1,0])
-      print "\n Steer: ", last_steer, "Throttle: ", last_throttle
+      #print "\n Steer: ", last_steer, "Throttle: ", last_throttle
+    else:
+      """
+      if firstMPCstep:
+        startTimer = datetime.datetime.now()  # Start timer for LMPC iteration
+        G, E, L, npG, npE = LMPC_BuildMatEqConst(A, B, np.zeros((n, 1)), N, n, d, np, spmatrix, 0)
+        endTimer = datetime.datetime.now(); deltaTimer_tv = endTimer - startTimer
+        firstMPCstep = False
+      else:
+      """
+      startTimer = datetime.datetime.now()  # Start timer for LMPC iteration
+
+      Atv, Btv, Ctv, indexUsed_list = LMPC_EstimateABC(LinPoints, LinInput, N, n, d, SS, uSS, TimeSS, qp, matrix,
+                                                                 PointAndTangent, dt, Lap)
+      endTimer = datetime.datetime.now(); deltaTimer_tv = endTimer - startTimer
+      G, E, L, npG, npE = LMPC_BuildMatEqConst(Atv, Btv, Ctv, N, n, d, np, spmatrix, 1)
+      
+      Sol, feasible, deltaTimer, slack = LMPC(npG, L, npE, F_LMPC, b_LMPC, x0, np, qp, matrix, datetime, la, SS,
+                                                    Qfun,  N, n, d, spmatrix, numSS_Points, Qslack, Q_LMPC, R_LMPC, Lap, swifth)
+      
+      #print("Linearization time: %.4fs Solver time: %.4fs" % (deltaTimer_tv.total_seconds(), deltaTimer.total_seconds()))
+      #print "Sol: ", Sol
+      #print "slack: ", slack
+
+      xPred, uPred = GetPred(Sol, n, d, N, np)
+      #print "\n LMPC xPred: ", xPred, "\n uPred:", uPred
+      LinPoints = np.vstack((xPred.T[1:,:], xPred.T[-1,:]))
+      LinInput = uPred.T
+      last_steer = np.asscalar(uPred[0,0])
+      last_throttle = np.asscalar(uPred[1,0])
+      
+      addSS[Lap-1] = addSS[Lap-1] + 1
+      indAdd = TimeSS[Lap-1] + addSS[Lap-1]
+      SS[indAdd, :, Lap - 1]  = x0 + np.array([0, 0, 0, 0, TrackLength, 0])
+      uSS[indAdd, :, Lap - 1] = np.array([last_steer, last_throttle])
+
+      
+      #print "\n Steer: ", last_steer, "Throttle: ", last_throttle
 
     control_msg = CarControl()
     control_msg.header.stamp = rospy.Time.now()

@@ -1,12 +1,14 @@
-def LMPC(npG, L, npE, F, b, x0, np, qp, matrix, datetime, la, SS, Qfun, N, n, d, spmatrix, numSS_Points, Qslack, Q_LMPC, R_LMPC, it):
+def LMPC(npG, L, npE, F, b, x0, np, qp, matrix, datetime, la, SS, Qfun, N, n, d, spmatrix, numSS_Points, Qslack, Q_LMPC, R_LMPC, it, swifth):
 
-    SS_Points1, Sel_Qfun1 = SelectPoints(SS, Qfun, it-1, x0, numSS_Points/2, np, la)
-    SS_Points2, Sel_Qfun2 = SelectPoints(SS, Qfun, it-2, x0, numSS_Points/2, np, la)
+    SS_Points1, Sel_Qfun1 = SelectPoints(SS, Qfun, it-1, x0, numSS_Points/2, np, la, swifth)
+    SS_Points2, Sel_Qfun2 = SelectPoints(SS, Qfun, it-2, x0, numSS_Points/2, np, la, swifth)
 
     SS_Points = np.hstack((SS_Points1, SS_Points2))
 
     Sel_Qfun = np.hstack((Sel_Qfun1, Sel_Qfun2))
 
+    #print "SSpoints: ", SS_Points
+    #print "Sel_Qfun: ", Sel_Qfun
 
     G, E = LMPC_TermConstr(npG, npE, N, n, d, np, spmatrix, SS_Points)
 
@@ -29,17 +31,24 @@ def LMPC(npG, L, npE, F, b, x0, np, qp, matrix, datetime, la, SS, Qfun, N, n, d,
 
     return Sol, feasible, deltaTimer, slack
 
-def SelectPoints(SS, Qfun, it, x0, numSS_Points, np, la):
+def SelectPoints(SS, Qfun, it, x0, numSS_Points, np, la, swifth):
     x = SS[:, :, it]
+
+    #print "SelectPoints Lap: ", it
+    #print "x:", x
 
     oneVec = np.ones((x.shape[0], 1))
     x0Vec = (np.dot(np.array([x0]).T, oneVec.T)).T
     diff = x - x0Vec
+    #print "x0Vec: ", x0Vec
+    #print "diff: ", diff
     norm = la.norm(diff, 1, axis=1)
+    #print "norm: ", norm
     MinNorm = np.argmin(norm)
+    #print "MinNorm:", MinNorm
 
-    SS_Points = x[MinNorm:MinNorm + numSS_Points, :].T
-    Sel_Qfun = Qfun[MinNorm:MinNorm + numSS_Points, it]
+    SS_Points = x[swifth + MinNorm:swifth + MinNorm + numSS_Points, :].T
+    Sel_Qfun = Qfun[swifth + MinNorm:swifth + MinNorm + numSS_Points, it]
     return SS_Points, Sel_Qfun
 
 def ComputeCost(x, u, np, TrackLength):
@@ -91,7 +100,7 @@ def LMPC_BuildMatCost(Sel_Qfun, numSS_Points, N, np, spmatrix, Qslack, Q, R):
     from scipy import linalg
 
     P = Q
-    vt = 2
+    vt = 15
 
 
     b = [Q] * (N)
@@ -175,9 +184,9 @@ def LMPC_BuildMatIneqConst(N, n, np, linalg, spmatrix, numSS_Points):
                    [ 0., 0., 0., 0., 0., 1.],
                    [ 0., 0., 0., 0., 0.,-1.]])
 
-    bx = np.array([[ 10.], # vx max
-                   [ 1.], # max ey
-                   [ 1.]])# max ey
+    bx = np.array([[ 15.], # vx max
+                   [ 5.0], # max ey
+                   [ 5.0]])# max ey
 
     # Buil the matrices for the input constraint in each region. In the region i we want Fx[i]x <= bx[b]
     Fu = np.array([[ 1., 0.],
