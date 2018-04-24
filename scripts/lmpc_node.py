@@ -79,48 +79,6 @@ B = np.array([[  1.02e-02,   1.69e-02],
  [ -1.55e-04,   1.89e-04],
  [  1.49e-03,  -1.24e-04]]) 
 
-
-"""
-A = np.array([[  1.00001646e+00,   4.93834654e-02,  -7.13001591e-02,   1.03286279e-03, -1.09281178e-06,  -1.55702281e-03],
- [  2.76065443e-05,   7.22519567e-02,   1.04690420e+00,  -8.12969814e-04, -5.26179580e-07,  -9.09208191e-03],
- [  1.97276332e-05,   1.95701598e-01,   7.31960352e-01,  -1.09296385e-03, -5.79942797e-07,  -1.91873083e-03],
- [  1.12329803e-03,  -4.96226814e-01,  -3.02685902e+00,   4.70746379e-02, -1.56042870e-05,  -3.39935207e-01],
- [  3.41508303e+00,  -1.27502432e+02,  -5.73361307e+02,  -2.53168006e+00, 9.12777480e-01, -5.64232885e+01],
- [  1.61668017e-03,  -6.09458868e-01,  -2.06604818e+00,  -1.45076674e-02, -3.02278600e-05,   7.18925962e-01]])
-
-B = np.array([[ -2.85751898e-03,   6.33644056e-02],
- [  9.97046761e-03,  -7.90270106e-03],
- [  1.06725018e-02,  -5.38088784e-03],
- [ -3.69024469e-01,  -4.51008174e-01],
- [  3.28396342e+01,  -1.16946229e+02],
- [ -7.37436408e-03,  -5.09850295e-01]])
-"""
-"""
- A matrix: 
-[[  1.00009182e+00  -8.18364555e-02  -7.35008476e-02   6.02760991e-02
-   -2.59257543e-06   1.71363368e-02]
- [  1.40299734e-05   2.52844698e-01   8.55479164e-01  -3.65659768e-04
-   -1.58266821e-07  -2.17679337e-03]
- [  1.22671712e-05   1.54320616e-01   7.87902086e-01  -9.85497495e-03
-   -3.11964747e-07  -1.59842078e-04]
- [ -2.09328038e-05   3.58350494e-03   2.49081451e-03   9.94728282e-01
-    7.99092598e-07   1.20291590e-03]
- [  4.74993439e+00  -2.75684013e+02  -1.17408868e+03  -1.80756537e+02
-    8.79833774e-01  -1.46366876e+02]
- [  7.48433725e-04  -2.80384562e-01  -1.02018405e+00  -4.78153060e-02
-   -1.36425977e-05   8.59694911e-01]] 
- B matrix: 
-[[  6.88316708e-01   3.93766139e-02]
- [  8.14142979e-02  -3.36231479e-03]
- [  2.73784536e-02  -1.76299706e-03]
- [  1.40507020e-02   2.51193371e-03]
- [ -4.27091376e+02  -2.15561673e+02]
- [ -1.19596457e-01  -2.41023188e-01]]
-
- 
- """
-
-
 def load_track():
     global x, y, cur, tang
     with open('/home/alex/catkin_ws/src/lmpc_unity/scripts/lmpc_track.csv') as f:
@@ -196,14 +154,6 @@ def callback_carstate(msg):
   return
 
 
-def callback_carcontrol(msg):
-  global last_steer, last_throttle
-  if msg.brake > 0.0:
-    last_throttle = -msg.brake
-  else:
-    last_throttle = msg.throttle
-  last_steer = msg.steering
-
 def collectData():
   global x
   global u
@@ -257,13 +207,11 @@ def newLap():
 # main function
 if __name__ == '__main__':
 	# initialize node
-  rospy.init_node('regression_node')
+  rospy.init_node('lmpc_node')
   load_track() #we need to combine both tracks
   PointAndTangent, TrackLength = CreateTrack()
 	# Subscribers
-  #range_sub = rospy.Subscriber("/log_mpc", LogMPC, callback_logmpc)
   car_state_sub = rospy.Subscriber("/car_state", CarState, callback_carstate)
-  #car_control_sub = rospy.Subscriber("/control", CarControl, callback_carcontrol)
 
   cmd_pub = rospy.Publisher("/control", CarControl, queue_size = 10)
 
@@ -320,7 +268,8 @@ if __name__ == '__main__':
       Sol, feasible = FTOCP(M, q, G, L, E, F, b, x0, np, qp, matrix)
       endTimer = datetime.datetime.now(); deltaTimer = endTimer - startTimer
 
-      #print("Linearization time: %.4fs Solver time: %.4fs" % (deltaTimer_tv.total_seconds(), deltaTimer.total_seconds()))
+      if i<3:
+        print("Linearization time: %.4fs Solver time: %.4fs" % (deltaTimer_tv.total_seconds(), deltaTimer.total_seconds()))
 
       xPred, uPred = GetPred(Sol, n, d, N, np)
       LinPoints = xPred.T
@@ -331,14 +280,7 @@ if __name__ == '__main__':
       last_throttle = np.asscalar(uPred[1,0])
       #print "\n Steer: ", last_steer, "Throttle: ", last_throttle
     else:
-      """
-      if firstMPCstep:
-        startTimer = datetime.datetime.now()  # Start timer for LMPC iteration
-        G, E, L, npG, npE = LMPC_BuildMatEqConst(A, B, np.zeros((n, 1)), N, n, d, np, spmatrix, 0)
-        endTimer = datetime.datetime.now(); deltaTimer_tv = endTimer - startTimer
-        firstMPCstep = False
-      else:
-      """
+
       startTimer = datetime.datetime.now()  # Start timer for LMPC iteration
 
       Atv, Btv, Ctv, indexUsed_list = LMPC_EstimateABC(LinPoints, LinInput, N, n, d, SS, uSS, TimeSS, qp, matrix,
@@ -349,7 +291,8 @@ if __name__ == '__main__':
       Sol, feasible, deltaTimer, slack = LMPC(npG, L, npE, F_LMPC, b_LMPC, x0, np, qp, matrix, datetime, la, SS,
                                                     Qfun,  N, n, d, spmatrix, numSS_Points, Qslack, Q_LMPC, R_LMPC, Lap, swifth)
       
-      #print("Linearization time: %.4fs Solver time: %.4fs" % (deltaTimer_tv.total_seconds(), deltaTimer.total_seconds()))
+      if i<3:
+        print("Linearization time: %.4fs Solver time: %.4fs" % (deltaTimer_tv.total_seconds(), deltaTimer.total_seconds()))
       #print "Sol: ", Sol
       #print "slack: ", slack
 
