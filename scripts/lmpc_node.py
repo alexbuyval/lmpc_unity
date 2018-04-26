@@ -60,6 +60,19 @@ uSS   = 10000*np.ones((2*states.shape[0], 2, Laps+2))
 Qfun  = 0*np.ones((2*states.shape[0], Laps+2)) # Need to initialize at zero as adding point on the fly
 
 additionalPoints = 0
+
+#time statistics
+mean_lin_time = 0.0
+max_lin_time = 0.0
+min_lin_time = 9999.0
+mean_solve_time = 0.0
+max_solve_time = 0.0
+min_solve_time = 9999.0
+sum_lin_time = 0.0
+sum_solve_time = 0.0
+count_lin_time = 0
+count_solve_time = 0
+
 """
 A = np.zeros((6,6))
 B = np.zeros((6,2))
@@ -163,6 +176,7 @@ def collectData():
   global identification_done
   global N
   global LinPoints
+  global min_lin_time, mean_lin_time, max_lin_time, min_solve_time, mean_solve_time, max_solve_time
 
   if i<Points:
     states[i,0] = vx
@@ -192,6 +206,8 @@ def newLap():
   global states, u
   global firstMPCstep
   global additionalPoints
+  global sum_lin_time, sum_solve_time, count_lin_time, count_solve_time
+  global min_lin_time, max_lin_time, min_solve_time, max_solve_time
 
   TimeSS[Lap] = i
   SS[0:TimeSS[Lap],:, Lap]  = states[0:i,:]
@@ -203,6 +219,21 @@ def newLap():
   firstMPCstep = True
   additionalPoints = 0
   i=0
+
+  if count_lin_time>0:
+    print "Linearization time. Min: ", min_lin_time, " Mean: ", sum_lin_time/count_lin_time, " Max: ", max_lin_time
+  if count_solve_time>0:
+    print "Solving time. Min: ", min_solve_time, " Mean: ", sum_solve_time/count_solve_time, " Max: ", max_solve_time
+
+  #reset time statistics
+  max_lin_time = 0.0
+  min_lin_time = 9999.0
+  max_solve_time = 0.0
+  min_solve_time = 9999.0
+  sum_lin_time = 0.0
+  sum_solve_time = 0.0
+  count_lin_time = 0
+  count_solve_time = 0
 
 # main function
 if __name__ == '__main__':
@@ -235,6 +266,8 @@ if __name__ == '__main__':
   Qslack = 50*np.diag([1, 10, 10, 10, 10, 10])
   Q_LMPC = 0 * np.diag([0.0, 0.0, 0.0, 0.0, 0.0, 0.0])  # vx, vy, wz, epsi, s, ey
   R_LMPC = 5 * np.diag([10.0, 1.0])  # delta, a
+
+
 
   while not rospy.is_shutdown():
 
@@ -291,10 +324,27 @@ if __name__ == '__main__':
       Sol, feasible, deltaTimer, slack = LMPC(npG, L, npE, F_LMPC, b_LMPC, x0, np, qp, matrix, datetime, la, SS,
                                                     Qfun,  N, n, d, spmatrix, numSS_Points, Qslack, Q_LMPC, R_LMPC, Lap, swifth)
       
-      if i<3:
-        print("Linearization time: %.4fs Solver time: %.4fs" % (deltaTimer_tv.total_seconds(), deltaTimer.total_seconds()))
+      #if i<10 or (i>30 and i<40):
+      #  print("i=%s Linearization time: %.4fs Solver time: %.4fs" % (i, deltaTimer_tv.total_seconds(), deltaTimer.total_seconds()))
       #print "Sol: ", Sol
       #print "slack: ", slack
+
+      lin_time = deltaTimer_tv.total_seconds()
+      sum_lin_time = sum_lin_time + lin_time
+      count_lin_time = count_lin_time + 1
+      if lin_time < min_lin_time:
+        min_lin_time = lin_time
+      if lin_time>max_lin_time:
+        max_lin_time = lin_time
+
+
+      solve_time = deltaTimer.total_seconds()
+      sum_solve_time = sum_solve_time + solve_time
+      count_solve_time = count_solve_time + 1
+      if solve_time < min_solve_time:
+        min_solve_time = solve_time
+      if solve_time>max_solve_time:
+        max_solve_time = solve_time
 
       xPred, uPred = GetPred(Sol, n, d, N, np)
       #print "\n LMPC xPred: ", xPred, "\n uPred:", uPred
