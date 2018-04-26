@@ -71,6 +71,7 @@ int main( void )
     DifferentialState dPSI;
     DifferentialState t;
     DifferentialState STEER;
+    DifferentialState lambda;
     IntermediateState s;
     IntermediateState Fl, FlFL, FlFR, FlRL, FlRR;
     IntermediateState ALPHAF, ALPHAR;
@@ -183,6 +184,7 @@ int main( void )
     f << dot(dPSI) == (a*(FyFL+FyFR)-b*(FyRL+FyRR)+c*(FxFR-FxFL+FxRR-FxRL)) / I / s;
     f << dot(t) == 1/s;
     f << dot(STEER) == dSTEER;
+    f << dot(lambda) == 0.0;
 
 
     //
@@ -208,7 +210,20 @@ int main( void )
     ocp.subjectTo( -2.5 <= dPSI <= 2.5 );
     ocp.subjectTo( 0.0 <= t <= 50.0 );
     ocp.subjectTo( -0.3 <= STEER <= 0.3 );
-
+    ocp.subjectTo(0.0 <= lambda <= 1.0);
+    
+    //zero will be replaced certain values at runtime mode
+    ocp.subjectTo(AT_END, eY*lambda == 0.0 ); //terminate constaint for SS^{j-2}
+    ocp.subjectTo(AT_END, eY*(1-lambda) == 0.0 ); //terminate constaint for SS^{j-1}
+    ocp.subjectTo(AT_END, ePsi*lambda == 0.0 );
+    ocp.subjectTo(AT_END, ePsi*(1-lambda) == 0.0 );
+    ocp.subjectTo(AT_END, vx*lambda == 0.0 );
+    ocp.subjectTo(AT_END, vx*(1-lambda) == 0.0 );
+    ocp.subjectTo(AT_END, vy*lambda == 0.0 );
+    ocp.subjectTo(AT_END, vy*(1-lambda) == 0.0 );
+    ocp.subjectTo(AT_END, t*lambda == 0.0 );
+    ocp.subjectTo(AT_END, t*(1-lambda) == 0.0 );
+    
     // DEFINE LEAST SQUARE FUNCTION:
     // -----------------------------
     Function h;
@@ -225,12 +240,14 @@ int main( void )
     h << vy;
 
     // Weighting matrices and measurement functions
-    // certain values are defined online 
+    // certain values will be defined at runtime mode
     BMatrix W = eye<bool>( h.getDim() );
 
     Function hN;
-    hN << t;
+    hN << lambda; //terminate cost for SS^{j-2}
+    hN << 1-lambda; //terminate cost for SS^{j-1}
 
+    //terminal cost values will be put into WN matrices at runtime mode
     BMatrix WN = eye<bool>( hN.getDim() );
 
 	
@@ -261,7 +278,7 @@ int main( void )
 
     //mhe.set( LEVENBERG_MARQUARDT, 1e-10 );
 
-    if (mpc.exportCode("roborace_mpc_export") != SUCCESSFUL_RETURN)
+    if (mpc.exportCode("race_lmpc_export") != SUCCESSFUL_RETURN)
 		exit( EXIT_FAILURE );
 
     mpc.printDimensionsQP( );
